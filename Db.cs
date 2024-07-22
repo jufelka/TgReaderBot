@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using Microsoft.Data.Sqlite;
+using Telegram.Bot.Types;
 
 namespace TgReaderBot
 {
@@ -11,11 +12,11 @@ namespace TgReaderBot
     {
         private readonly string _connectionString = "Data Source=tg_reader_bot.db";
 
-        public void CreateDb()
+        public async Task CreateDb()
         {
             using (var connection = new SqliteConnection(_connectionString))
             {
-                connection.Open();
+                await connection.OpenAsync();
 
                 var createUsersTable = @"
                     CREATE TABLE IF NOT EXISTS Users (
@@ -31,7 +32,7 @@ namespace TgReaderBot
                         file_path TEXT NOT NULL,
                         title TEXT NOT NULL,
                         user_id INTEGER,
-                        is_readed INTEGER DEFAULT FALSE,
+                        is_read INTEGER DEFAULT FALSE,
                         FOREIGN KEY (user_id) REFERENCES Users (user_id)
                     );";
 
@@ -40,33 +41,33 @@ namespace TgReaderBot
                         book_id INTEGER PRIMARY KEY,
                         total_pages INTEGER
                         current_page INTEGER DEFAULT 1,
-                        is_readed INTEGER DEFAULT FALSE,
+                        is_read INTEGER DEFAULT FALSE,
                         last_access TEXT,
                         FOREIGN KEY (book_id) REFERENCES Books (book_id)
                     );";
 
                 using (var command = new SqliteCommand(createUsersTable, connection))
                 {
-                    command.ExecuteNonQuery();
+                    await command.ExecuteScalarAsync();
                 }
 
                 using (var command = new SqliteCommand(createBooksTable, connection))
                 {
-                    command.ExecuteNonQuery();
+                    await command.ExecuteScalarAsync();
                 }
 
                 using (var command = new SqliteCommand(createPagesTable, connection))
                 {
-                    command.ExecuteNonQuery();
+                    await command.ExecuteScalarAsync();
                 }
             }
         }
 
-        public void AddUser(int userId, string username, long chatId)
+        public async Task AddUser(int userId, string username, long chatId)
         {
             using (var connection = new SqliteConnection(_connectionString))
             {
-                connection.Open();
+                await connection.OpenAsync();
 
                 var insertUserCommand = @"
                     INSERT INTO Users (user_id, username, chat_id)
@@ -74,22 +75,44 @@ namespace TgReaderBot
 
                 using (var command = new SqliteCommand(insertUserCommand, connection))
                 {
-                    command.Parameters.AddWithValue("@user_id", 12345);
-                    command.Parameters.AddWithValue("@username", "john_doe");
-                    command.Parameters.AddWithValue("@chat_id", 67890);
+                    command.Parameters.AddWithValue("@user_id", userId);
+                    command.Parameters.AddWithValue("@username", username);
+                    command.Parameters.AddWithValue("@chat_id", chatId);
 
-                    command.ExecuteNonQuery();
+                    await command.ExecuteScalarAsync();
                 }
             }
         }
 
-        public void AddBook(int userId, string filePath)
+        public async Task<bool> CheckUserExist(int userId)
         {
-            string title = string.Empty;
+            object? user;
 
             using (var connection = new SqliteConnection(_connectionString))
             {
-                connection.Open();
+                await connection.OpenAsync();
+
+                var commandText = @"SELECT @user_id FROM Users
+                                    WHERE user_id = @user_id";
+
+                using (var command = new SqliteCommand(commandText, connection))
+                {
+                    command.Parameters.AddWithValue("@user_id", userId);
+
+                    user = await command.ExecuteScalarAsync();
+                }
+            }
+
+            return user != null;
+        }
+
+        public async Task AddBookToUser(int userId, string filePath)
+        {
+            string title = string.Empty;    // todo get book title
+
+            using (var connection = new SqliteConnection(_connectionString))
+            {
+                await connection.OpenAsync();
 
                 var insertFileCommand = @"
                     INSERT INTO Books (user_id, file_path, title)
@@ -97,47 +120,130 @@ namespace TgReaderBot
 
                 using (var command = new SqliteCommand(insertFileCommand, connection))
                 {
-                    command.Parameters.AddWithValue("@user_id", 12345);
-                    command.Parameters.AddWithValue("@file_path", "path/to/file.fb2");
-                    command.Parameters.AddWithValue("@title", "title");
+                    command.Parameters.AddWithValue("@user_id", userId);
+                    command.Parameters.AddWithValue("@file_path", filePath);
+                    command.Parameters.AddWithValue("@title", title);
 
-                    command.ExecuteNonQuery();
+                    await command.ExecuteNonQueryAsync();
                 }
             }
         }
 
-        public void SetCurrentBook(int userId, int bookId)
-        {
-
-        }
-
-        public void GetCurrentBook(int userId)
-        {
-
-        }
-
-        public void SetBookIsRead(int userId, int bookId)
-        {
-
-        }
-
-        public bool CheckBookIsRead(int bookId)
-        {
-
-            return false;
-        }
-
-        public List<int> SelectAllUserBooks(int userId)
-        {
-
-            return new List<int> { 0 };
-        }
-
-        public void UpdateCurrentPage(int bookId, int newCurrentPage)
+        public async Task SetCurrentBook(int userId, int bookId)
         {
             using (var connection = new SqliteConnection(_connectionString))
             {
-                connection.Open();
+                await connection.OpenAsync();
+
+                var commandText = @"UPDATE Users
+                                    SET current_book = @book_id
+                                    WHERE user_id = @user_id";
+
+                using (var command = new SqliteCommand(commandText, connection))
+                {
+                    command.Parameters.AddWithValue("@user_id", userId);
+                    command.Parameters.AddWithValue("@book_id", bookId);
+
+                    await command.ExecuteNonQueryAsync();
+                }
+            }
+        }
+
+        public async Task<int?> GetCurrentBook(int userId)
+        {
+            object? book;
+
+            using (var connection = new SqliteConnection(_connectionString))
+            {
+                await connection.OpenAsync();
+
+                var commandText = @"SELECT current_book FROM Users
+                                    WHERE user_id = @user_id";
+
+                using (var command = new SqliteCommand(commandText, connection))
+                {
+                    command.Parameters.AddWithValue("@user_id", userId);
+
+                    book = await command.ExecuteScalarAsync();
+                }
+            }
+
+            return (int?)book;
+        }
+
+        public async Task SetBookIsRead(int bookId)
+        {
+            using (var connection = new SqliteConnection(_connectionString))
+            {
+                await connection.OpenAsync();
+
+                var commandText = @"UPDATE Books
+                                    SET is_read = TRUE
+                                    WHERE book_id = @book_id";
+
+                using (var command = new SqliteCommand(commandText, connection))
+                {
+                    command.Parameters.AddWithValue("@book_id", bookId);
+
+                    await command.ExecuteNonQueryAsync();
+                }
+            }
+        }
+
+        public async Task<bool> CheckBookIsRead(int bookId)
+        {
+            string isRead;
+
+            using (var connection = new SqliteConnection(_connectionString))
+            {
+                await connection.OpenAsync();
+
+                var commandText = @"SELECT is_read FROM Books
+                                    WHERE book_id = @book_id";
+
+                using (var command = new SqliteCommand(commandText, connection))
+                {
+                    command.Parameters.AddWithValue("@book_id", bookId);
+
+                    isRead = (string)await command.ExecuteScalarAsync();
+                }
+            }
+
+            return isRead == "TRUE";
+        }
+
+        public async Task<List<int>> SelectAllUsersBooks(int userId)
+        {
+            var booksList = new List<int>();
+
+            using (var connection = new SqliteConnection(_connectionString))
+            {
+                await connection.OpenAsync();
+
+                var commandText = @"";
+
+                using (var command = new SqliteCommand(commandText, connection))
+                {
+                    command.Parameters.AddWithValue("@user_id", userId);
+
+                    using (var reader = await command.ExecuteReaderAsync())
+                    {
+                        while (reader.Read())
+                        {
+                            booksList.Add(reader.GetInt32(0));
+                        }
+                    }
+                }
+            }
+
+            return booksList;
+        }
+
+        public async Task UpdateCurrentPage(int bookId, int newCurrentPage)
+        {
+            using (var connection = new SqliteConnection(_connectionString))
+            {
+                await connection.OpenAsync();
 
                 var updatePageCommand = @"
                     UPDATE Pages
@@ -146,19 +252,21 @@ namespace TgReaderBot
 
                 using (var command = new SqliteCommand(updatePageCommand, connection))
                 {
-                    command.Parameters.AddWithValue("@current_page", 5);
-                    command.Parameters.AddWithValue("@book_id", 3);
+                    command.Parameters.AddWithValue("@current_page", newCurrentPage);
+                    command.Parameters.AddWithValue("@book_id", bookId);
 
-                    command.ExecuteNonQuery();
+                    await command.ExecuteNonQueryAsync();
                 }
             }
         }
 
-        public void GetCurrentPage(int bookId)
+        public async Task<int> GetCurrentPage(int bookId)
         {
+            int currentPage = 0;
+
             using (var connection = new SqliteConnection(_connectionString))
             {
-                connection.Open();
+                await connection.OpenAsync();
 
                 var readPageCommand = @"
                     SELECT current_page FROM Pages
@@ -166,38 +274,100 @@ namespace TgReaderBot
 
                 using (var command = new SqliteCommand(readPageCommand, connection))
                 {
-                    command.Parameters.AddWithValue("@book_id", 12345);
+                    command.Parameters.AddWithValue("@book_id", bookId);
 
-                    using (var reader = command.ExecuteReader())
+                    using (var reader = await command.ExecuteReaderAsync())
                     {
                         if (reader.Read())
                         {
-                            var currentPage = reader.GetInt32(0);
-                            Console.WriteLine($"Current page: {currentPage}");
+                            currentPage = reader.GetInt32(0);
                         }
                     }
                 }
             }
+
+            return currentPage;
         }
 
-        public void SetTotalPages()
+        public async Task SetTotalPages(int bookId, int totalPages)
         {
+            using (var connection = new SqliteConnection(_connectionString))
+            {
+                await connection.OpenAsync();
 
+                var commandText = @"UPDATE Pages
+                                    SET total_pages = @total_pages
+                                    WHERE book_id = @book_id";
+
+                using (var command = new SqliteCommand(commandText, connection))
+                {
+                    command.Parameters.AddWithValue("@book_id", bookId);
+                    command.Parameters.AddWithValue("@total_pages", totalPages);
+
+                    await command.ExecuteNonQueryAsync();
+                }
+            }
         }
 
-        public void SetCurentPageIsRead()
+        public async Task SetCurentPageIsRead(int bookId)
         {
+            using (var connection = new SqliteConnection(_connectionString))
+            {
+                await connection.OpenAsync();
 
+                var commandText = @"UPDATE Pages
+                                    SET is_read = TRUE
+                                    WHERE book_id = @book_id";
+
+                using (var command = new SqliteCommand(commandText, connection))
+                {
+                    command.Parameters.AddWithValue("@book_id", bookId);
+
+                    await command.ExecuteNonQueryAsync();
+                }
+            }
         }
 
-        public void SetPageLastAccess()
+        public async Task SetPageLastAccess(int bookId, string timestamp)
         {
+            using (var connection = new SqliteConnection(_connectionString))
+            {
+                await connection.OpenAsync();
 
+                var commandText = @"UPDATE Pages
+                                    SET last_access = @last_access
+                                    WHERE book_id = @book_id";
+
+                using (var command = new SqliteCommand(commandText, connection))
+                {
+                    command.Parameters.AddWithValue("@book_id", bookId);
+                    command.Parameters.AddWithValue("@last_access", timestamp);
+
+                    await command.ExecuteNonQueryAsync();
+                }
+            }
         }
 
-        public void GetPageLastAccess()
+        public async Task<string?> GetPageLastAccess(int bookId)
         {
+            string? timestamp = string.Empty;
 
+            using (var connection = new SqliteConnection(_connectionString))
+            {
+                await connection.OpenAsync();
+
+                var commandText = @"SELECT last_access FROM Pages
+                                    WHERE book_id = @book_id";
+
+                using (var command = new SqliteCommand(commandText, connection))
+                {
+                    command.Parameters.AddWithValue("@book_id", bookId);
+
+                    timestamp = (string)await command.ExecuteScalarAsync();
+                }
+            }
+
+            return timestamp;
         }
     }
 }

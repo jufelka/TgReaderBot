@@ -8,7 +8,7 @@ using Telegram.Bot.Types;
 
 namespace TgReaderBot
 {
-    internal class Db
+    public class Db
     {
         private readonly string _connectionString = "Data Source=tg_reader_bot.db";
 
@@ -22,14 +22,14 @@ namespace TgReaderBot
                     CREATE TABLE IF NOT EXISTS Users (
                         user_id INTEGER PRIMARY KEY,
                         username TEXT,
-                        chat_id INTEGER NOT NULL,
-                        current_book INTEGER
+                        current_book_id TEXT
                     );";
 
                 var createBooksTable = @"
                     CREATE TABLE IF NOT EXISTS Books (
-                        book_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        file_path TEXT NOT NULL,
+                        book_id TEXT PRIMARY KEY,
+                        file_id TEXT NOT NULL,
+                        filename TEXT NOT NULL,
                         title TEXT NOT NULL,
                         user_id INTEGER,
                         is_read INTEGER DEFAULT FALSE,
@@ -38,7 +38,7 @@ namespace TgReaderBot
 
                 var createPagesTable = @"
                     CREATE TABLE IF NOT EXISTS Pages (
-                        book_id INTEGER PRIMARY KEY,
+                        book_id TEXT PRIMARY KEY,
                         total_pages INTEGER
                         current_page INTEGER DEFAULT 1,
                         is_read INTEGER DEFAULT FALSE,
@@ -63,28 +63,27 @@ namespace TgReaderBot
             }
         }
 
-        public async Task AddUser(int userId, string username, long chatId)
+        public async Task AddUser(long userId, string? username)
         {
             using (var connection = new SqliteConnection(_connectionString))
             {
                 await connection.OpenAsync();
 
                 var insertUserCommand = @"
-                    INSERT INTO Users (user_id, username, chat_id)
-                    VALUES (@user_id, @username, @chat_id);";
+                    INSERT INTO Users (user_id, username)
+                    VALUES (@user_id, @username);";
 
                 using (var command = new SqliteCommand(insertUserCommand, connection))
                 {
                     command.Parameters.AddWithValue("@user_id", userId);
                     command.Parameters.AddWithValue("@username", username);
-                    command.Parameters.AddWithValue("@chat_id", chatId);
 
                     await command.ExecuteScalarAsync();
                 }
             }
         }
 
-        public async Task<bool> CheckUserExist(int userId)
+        public async Task<bool> CheckUserExists(long userId)
         {
             object? user;
 
@@ -106,37 +105,42 @@ namespace TgReaderBot
             return user != null;
         }
 
-        public async Task AddBookToUser(int userId, string filePath)
+        public async Task<string> AddBook(long userId, string bookId, string filename, string fileId)
         {
-            string title = string.Empty;    // todo get book title
+            string title = Path.GetFileNameWithoutExtension(filename);
 
             using (var connection = new SqliteConnection(_connectionString))
             {
                 await connection.OpenAsync();
 
                 var insertFileCommand = @"
-                    INSERT INTO Books (user_id, file_path, title)
-                    VALUES (@user_id, @file_path, @title);";
+                    INSERT INTO Books (book_id, file_id, filename, title, user_id)
+                    VALUES (@book_id, @file_id, @filename, @title, @user_id)
+                    RETURNING book_id;";
 
                 using (var command = new SqliteCommand(insertFileCommand, connection))
                 {
-                    command.Parameters.AddWithValue("@user_id", userId);
-                    command.Parameters.AddWithValue("@file_path", filePath);
+                    command.Parameters.AddWithValue("@book_id", userId);
+                    command.Parameters.AddWithValue("@file_id", fileId);
+                    command.Parameters.AddWithValue("@filename", filename);
                     command.Parameters.AddWithValue("@title", title);
+                    command.Parameters.AddWithValue("@user_id", userId);
 
                     await command.ExecuteNonQueryAsync();
                 }
             }
+
+            return bookId;
         }
 
-        public async Task SetCurrentBook(int userId, int bookId)
+        public async Task SetCurrentBook(long userId, string bookId)
         {
             using (var connection = new SqliteConnection(_connectionString))
             {
                 await connection.OpenAsync();
 
                 var commandText = @"UPDATE Users
-                                    SET current_book = @book_id
+                                    SET current_book_id = @book_id
                                     WHERE user_id = @user_id";
 
                 using (var command = new SqliteCommand(commandText, connection))
@@ -149,9 +153,9 @@ namespace TgReaderBot
             }
         }
 
-        public async Task<int?> GetCurrentBook(int userId)
+        public async Task<string?> GetCurrentBookId(long userId)
         {
-            object? book;
+            object? bookId;
 
             using (var connection = new SqliteConnection(_connectionString))
             {
@@ -164,14 +168,37 @@ namespace TgReaderBot
                 {
                     command.Parameters.AddWithValue("@user_id", userId);
 
+                    bookId = await command.ExecuteScalarAsync();
+                }
+            }
+
+            return (string?)bookId;
+        }
+
+        public async Task<string?> GetCurrentBookTitle(long userId)
+        {
+            object? book;
+
+            using (var connection = new SqliteConnection(_connectionString))
+            {
+                await connection.OpenAsync();
+
+                var commandText = @"SELECT title 
+                                    FROM Books
+                                    WHERE user_id = @user_id";
+
+                using (var command = new SqliteCommand(commandText, connection))
+                {
+                    command.Parameters.AddWithValue("@user_id", userId);
+
                     book = await command.ExecuteScalarAsync();
                 }
             }
 
-            return (int?)book;
+            return (string?)book;
         }
 
-        public async Task SetBookIsRead(int bookId)
+        public async Task SetBookIsRead(string bookId)
         {
             using (var connection = new SqliteConnection(_connectionString))
             {
@@ -190,7 +217,7 @@ namespace TgReaderBot
             }
         }
 
-        public async Task<bool> CheckBookIsRead(int bookId)
+        public async Task<bool> CheckBookIsRead(string bookId)
         {
             string isRead;
 
@@ -212,34 +239,7 @@ namespace TgReaderBot
             return isRead == "TRUE";
         }
 
-        public async Task<List<int>> SelectAllUsersBooks(int userId)
-        {
-            var booksList = new List<int>();
-
-            using (var connection = new SqliteConnection(_connectionString))
-            {
-                await connection.OpenAsync();
-
-                var commandText = @"";
-
-                using (var command = new SqliteCommand(commandText, connection))
-                {
-                    command.Parameters.AddWithValue("@user_id", userId);
-
-                    using (var reader = await command.ExecuteReaderAsync())
-                    {
-                        while (reader.Read())
-                        {
-                            booksList.Add(reader.GetInt32(0));
-                        }
-                    }
-                }
-            }
-
-            return booksList;
-        }
-
-        public async Task UpdateCurrentPage(int bookId, int newCurrentPage)
+        public async Task UpdateCurrentPage(string bookId, int newCurrentPage)
         {
             using (var connection = new SqliteConnection(_connectionString))
             {
@@ -260,7 +260,7 @@ namespace TgReaderBot
             }
         }
 
-        public async Task<int> GetCurrentPage(int bookId)
+        public async Task<int> GetCurrentPage(string bookId)
         {
             int currentPage = 0;
 
@@ -289,7 +289,7 @@ namespace TgReaderBot
             return currentPage;
         }
 
-        public async Task SetTotalPages(int bookId, int totalPages)
+        public async Task SetTotalPages(string bookId, int totalPages)
         {
             using (var connection = new SqliteConnection(_connectionString))
             {
@@ -309,7 +309,7 @@ namespace TgReaderBot
             }
         }
 
-        public async Task SetCurentPageIsRead(int bookId)
+        public async Task SetCurentPageIsRead(string bookId)
         {
             using (var connection = new SqliteConnection(_connectionString))
             {
@@ -328,7 +328,7 @@ namespace TgReaderBot
             }
         }
 
-        public async Task SetPageLastAccess(int bookId, string timestamp)
+        public async Task SetPageLastAccess(string bookId, string timestamp)
         {
             using (var connection = new SqliteConnection(_connectionString))
             {
@@ -348,7 +348,7 @@ namespace TgReaderBot
             }
         }
 
-        public async Task<string?> GetPageLastAccess(int bookId)
+        public async Task<string?> GetPageLastAccess(string bookId)
         {
             string? timestamp = string.Empty;
 
